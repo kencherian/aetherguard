@@ -1,0 +1,31 @@
+# --- AetherGuard Enterprise GitIgnore ---
+
+# Compiled Go Binary Assets
+gateway
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+__debug_bin
+
+# Persistent Storage & Database Files
+*.db
+*.db-journal
+*.db-wal
+
+# Python Environment Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+env/
+venv/
+
+# Operating System Temporary States
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

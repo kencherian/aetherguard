@@ -1,0 +1,23 @@
+# Use the official lightweight Go image
+FROM golang:1.26-alpine as builder
+
+WORKDIR /app
+
+# Copy dependency files and source code
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY main.go .
+COPY aetherguard.db .
+
+# Compile the Go binary into a high-performance executable
+RUN CGO_ENABLED=0 GOOS=linux go build -o gateway main.go
+
+# Final minimal execution runtime layer
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder /app/gateway .
+COPY --from=builder /app/aetherguard.db .
+
+EXPOSE 8080
+CMD ["./gateway"]

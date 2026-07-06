@@ -1,0 +1,41 @@
+services:
+  # Service 1: The High-Speed Ingestion Proxy
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      - db-data:/app/db
+    environment:
+      - DATABASE_URL=/app/db/aetherguard.db
+    depends_on:
+      - sandbox_worker
+
+  # Service 2: The Core Security Sandbox Analyzer
+  sandbox_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    command: python worker.py
+    ports:
+      - "5000:5000"
+    volumes:
+      - db-data:/app/db
+
+  # Service 3: The Web Operations Interface
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    command: python dashboard.py
+    ports:
+      - "3000:3000"
+    volumes:
+      - db-data:/app/db
+    depends_on:
+      - gateway
+
+volumes:
+  db-data:
