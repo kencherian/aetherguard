@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
-	_ "modernc.org/sqlite" // Pure-Go SQLite configuration driver
+	_ "modernc.org/sqlite" 
 )
 
 type AgentPayload struct {
@@ -28,11 +30,15 @@ type SandboxResponse struct {
 	Reason string `json:"reason"`
 }
 
+// SlackWebhookPayload structures the exact payload format Slack requires
+type SlackWebhookPayload struct {
+	Text string `json:"text"`
+}
+
 var db *sql.DB
 
 func main() {
 	var err error
-	// FIX: Points to the exact volume mount directory shared between all docker containers
 	db, err = sql.Open("sqlite", "/app/db/aetherguard.db")
 	if err != nil {
 		fmt.Printf("Database connection failure: %v\n", err)
@@ -42,7 +48,7 @@ func main() {
 
 	http.HandleFunc("/", proxyHandler)
 	port := ":8080"
-	fmt.Printf("🔒 [PERSISTENT] AetherGuard Gateway online on port %s...\n", port)
+	fmt.Printf("🔒 [ALERT-READY] AetherGuard Gateway online on port %s...\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {
 		fmt.Printf("Engine failure: %v\n", err)
 	}
@@ -69,7 +75,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("\n[Database Proxy] Intercepted call from agent: %s\n", payload.AgentID)
 
-	// ---- LIVE SQL IDENTITY & PARAMETER QUERY ----
 	var allowedActionsStr string
 	var maxLimit int
 
@@ -84,7 +89,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Action Check Matching
 	actionAllowed := false
 	actions := strings.Split(allowedActionsStr, ",")
 	for _, a := range actions {
@@ -98,13 +102,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Budget Limit Matching
 	if payload.Amount > maxLimit {
 		logAndReject(w, payload, "BLOCKED", fmt.Sprintf("Budget Violation: Value $%d exceeds limit.", payload.Amount))
 		return
 	}
 
-	// Deep Sandbox Execution Checking
 	if payload.Action == "execute_calculation" && payload.CodePayload != "" {
 		isSafe := callPythonSandbox(payload.CodePayload)
 		if !isSafe {
@@ -113,7 +115,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Log a successful verification entry into our ledger
 	_, _ = db.Exec("INSERT INTO audit_ledger (agent_id, action, amount, status, reason) VALUES (?, ?, ?, ?, ?)",
 		payload.AgentID, payload.Action, payload.Amount, "PASSED", "")
 
@@ -127,7 +128,6 @@ func callPythonSandbox(code string) bool {
 	sandboxReq := SandboxRequest{CodePayload: code}
 	jsonData, _ := json.Marshal(sandboxReq)
 
-	// FIX: Changed host endpoint destination from 'localhost' to 'sandbox_worker' service name
 	resp, err := http.Post("http://sandbox_worker:5000/sandbox", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return false
@@ -148,10 +148,50 @@ func logAndReject(w http.ResponseWriter, payload AgentPayload, status string, re
 		fmt.Printf("Ledger logging error: %v\n", err)
 	}
 
+	// Async dispatch to avoid interceptor performance penalties
+	go sendWebhookAlert(payload, reason)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	json.NewEncoder(w).Encode(map[string]string{"status": "blocked", "reason": reason})
 	fmt.Printf("❌ [BLOCK] %s\n", reason)
+}
+
+func sendWebhookAlert(payload AgentPayload, reason string) {
+	// FIX: Pull the Webhook destination dynamically from the container context
+	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
+	if webhookURL == "" {
+		fmt.Println("📢 [ALERT SYSTEM] Alert dropped. SLACK_WEBHOOK_URL environment variable is empty.")
+		return
+	}
+
+	alertText := fmt.Sprintf(
+		"🚨 *AetherGuard Security Containment Alert*\n*Timestamp:* %s\n*Agent ID:* `%s`\n*Attempted Action:* `%s`\n*Financial Impact Scope:* $%d\n*Violation Exception:* _%s_",
+		time.Now().Format("2006-01-02 15:04:05"),
+		payload.AgentID,
+		payload.Action,
+		payload.Amount,
+		reason,
+	)
+
+	webhookPayload := SlackWebhookPayload{Text: alertText}
+	jsonData, err := json.Marshal(webhookPayload)
+	if err != nil {
+		return
+	}
+
+	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		fmt.Printf("⚠️ [ALERT EXCEPTION] Webhook communication failed: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		print("📢 [ALERT SYSTEM] Real-time security alert dispatched successfully into Slack.")
+	} else {
+		fmt.Printf("⚠️ [ALERT SYSTEM] Remote channel responded with error code: %d\n", resp.StatusCode)
+	}
 }
 
 func respondWithError(w http.ResponseWriter, message string, code int) {

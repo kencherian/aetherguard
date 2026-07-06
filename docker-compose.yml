@@ -10,6 +10,7 @@ services:
       - db-data:/app/db
     environment:
       - DATABASE_URL=/app/db/aetherguard.db
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     depends_on:
       - sandbox_worker
 
